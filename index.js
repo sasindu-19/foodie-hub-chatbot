@@ -441,7 +441,7 @@ const ADMIN_NUMBER = "94762057685@c.us";
 
 client.on("message_create", async (msg) => {
   console.log(`📩 Message received from: ${msg.from} | body: "${msg.body}" | type: ${msg.type}`);
-  if (msg.from !== ADMIN_NUMBER) return;
+  if (msg.from !== ADMIN_NUMBER && !msg.from.includes("94762057685")) return;
 
   let textToProcess = (msg.body || "").trim();
   let isVoice = false;
@@ -453,33 +453,43 @@ client.on("message_create", async (msg) => {
 
     try {
       console.time("📥 Download Media");
-      const media = await msg.downloadMedia();
+      let media = await msg.downloadMedia();
+      
+      // Retry if WhatsApp Web has not yet finished caching the audio
+      if (!media) {
+        for (let attempt = 1; attempt <= 3 && !media; attempt++) {
+          console.log(`⏳ Retrying audio download (Attempt ${attempt}/3)...`);
+          await new Promise((res) => setTimeout(res, 1200));
+          media = await msg.downloadMedia();
+        }
+      }
       console.timeEnd("📥 Download Media");
 
-      if (media) {
-        const fs = require("fs");
-        const path = require("path");
-        const filePath = path.join(__dirname, "voice.ogg");
-        fs.writeFileSync(filePath, media.data, { encoding: "base64" });
-        console.log("✅ Audio file saved locally.");
-
-        console.log("🎙️ Sending audio to Groq Whisper API...");
-        console.time("🎙️ Groq Transcription");
-        const transcription = await groq.audio.transcriptions.create({
-          file: fs.createReadStream(filePath),
-          model: "whisper-large-v3",
-          response_format: "json",
-          language: "en",
-        });
-        console.timeEnd("🎙️ Groq Transcription");
-
-        textToProcess = (transcription.text || "").trim();
-        console.log(`🎙️ Transcribed Voice: "${textToProcess}"`);
-        await msg.reply(`🗣️ *You said:* "${textToProcess}"`);
+      if (!media) {
+        return await msg.reply("⚠️ _Could not download voice note. Please try sending again!_");
       }
+
+      const fs = require("fs");
+      const path = require("path");
+      const filePath = path.join(__dirname, "voice.ogg");
+      fs.writeFileSync(filePath, media.data, { encoding: "base64" });
+      console.log("✅ Audio file saved locally.");
+
+      console.log("🎙️ Sending audio to Groq Whisper API...");
+      console.time("🎙️ Groq Transcription");
+      const transcription = await groq.audio.transcriptions.create({
+        file: fs.createReadStream(filePath),
+        model: "whisper-large-v3",
+        response_format: "json",
+      });
+      console.timeEnd("🎙️ Groq Transcription");
+
+      textToProcess = (transcription.text || "").trim();
+      console.log(`🎙️ Transcribed Voice: "${textToProcess}"`);
+      await msg.reply(`🗣️ *You said:* "${textToProcess}"`);
     } catch (error) {
       console.error("❌ Speech-to-Text Error:", error);
-      return msg.reply(`❌ _Error processing voice note:_ ${error.message}`);
+      return await msg.reply(`❌ _Error processing voice note:_ ${error.message}`);
     }
   }
 
@@ -530,7 +540,7 @@ client.on("message_create", async (msg) => {
       for (let i = 0; i < retries; i++) {
         try {
           response = await ai.models.generateContent({
-            model: "gemini-2.0-flash",
+            model: "gemini-3.5-flash-lite",
             contents: textToProcess,
             config: {
               systemInstruction: systemPrompt
